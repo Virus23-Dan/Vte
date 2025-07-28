@@ -1,16 +1,19 @@
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:sizer/sizer.dart';
 
 import '../../core/app_export.dart';
+import '../../services/video_analysis_service.dart';
 import './widgets/empty_gallery_widget.dart';
 import './widgets/large_file_warning_widget.dart';
 import './widgets/processing_queue_widget.dart';
-import './widgets/recent_uploads_widget.dart';
 import './widgets/video_context_menu_widget.dart';
 import './widgets/video_grid_item_widget.dart';
 import './widgets/video_search_bar_widget.dart';
@@ -44,19 +47,61 @@ class _VideoUploadState extends State<VideoUpload>
 
   OverlayEntry? _contextMenuOverlay;
 
+  List<Map<String, dynamic>> _uploadedVideos = [];
+  String _searchQuery = '';
+
+  // Selection state
+  bool _isSelectionMode = false;
+  Set<int> _selectedVideoIdsSet = {};
+
+  // Upload state
+  bool _isUploading = false;
+  double _uploadProgress = 0.0;
+
+  // Animation controllers
+  late AnimationController _fabController;
+  late AnimationController _listController;
+  late Animation<double> _fabAnimation;
+  late Animation<Offset> _listAnimation;
+
+  // Services
+  final VideoAnalysisService _analysisService = VideoAnalysisService();
+
   @override
   void initState() {
     super.initState();
-    _initializeData();
-    _initializeCamera();
+    _setupAnimations();
+    _loadUploadedVideos();
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
-    _cameraController?.dispose();
-    _contextMenuOverlay?.remove();
+    _fabController.dispose();
+    _listController.dispose();
     super.dispose();
+  }
+
+  Future<void> _setupAnimations() async {
+    _fabController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 300));
+    _listController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 300));
+
+    _fabAnimation =
+        CurvedAnimation(parent: _fabController, curve: Curves.easeInOut);
+    _listAnimation = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _listController, curve: Curves.easeInOut));
+  }
+
+  Future<void> _loadUploadedVideos() async {
+    // Load uploaded videos from local storage or database
+    // For now, just simulate loading
+    await Future.delayed(Duration(seconds: 1));
+    setState(() {
+      _filteredVideos = List.from(_uploadedVideos);
+    });
   }
 
   Future<void> _initializeCamera() async {
@@ -229,13 +274,13 @@ class _VideoUploadState extends State<VideoUpload>
 
   void _toggleVideoSelection(String videoId) {
     setState(() {
-      if (_selectedVideoIds.contains(videoId)) {
-        _selectedVideoIds.remove(videoId);
+      if (_selectedVideoIdsSet.contains(videoId)) {
+        _selectedVideoIdsSet.remove(videoId);
       } else {
-        _selectedVideoIds.add(videoId);
+        _selectedVideoIdsSet.add(videoId);
       }
 
-      if (_selectedVideoIds.isEmpty) {
+      if (_selectedVideoIdsSet.isEmpty) {
         _isMultiSelectMode = false;
       }
     });
@@ -245,7 +290,7 @@ class _VideoUploadState extends State<VideoUpload>
     setState(() {
       _isMultiSelectMode = !_isMultiSelectMode;
       if (!_isMultiSelectMode) {
-        _selectedVideoIds.clear();
+        _selectedVideoIdsSet.clear();
       }
     });
   }
@@ -266,33 +311,29 @@ class _VideoUploadState extends State<VideoUpload>
     _contextMenuOverlay?.remove();
 
     _contextMenuOverlay = OverlayEntry(
-      builder: (context) => Positioned(
-        left: position.dx - 100,
-        top: position.dy - 50,
-        child: Material(
-          color: Colors.transparent,
-          child: VideoContextMenuWidget(
-            video: video,
-            onPreview: () {
-              _contextMenuOverlay?.remove();
-              _previewVideo(video);
-            },
-            onDetails: () {
-              _contextMenuOverlay?.remove();
-              _showVideoDetails(video);
-            },
-            onShare: () {
-              _contextMenuOverlay?.remove();
-              _shareVideo(video);
-            },
-            onRemove: () {
-              _contextMenuOverlay?.remove();
-              _removeFromRecent(video);
-            },
-          ),
-        ),
-      ),
-    );
+        builder: (context) => Positioned(
+            left: position.dx - 100,
+            top: position.dy - 50,
+            child: Material(
+                color: Colors.transparent,
+                child: VideoContextMenuWidget(
+                    video: video,
+                    onPreview: () {
+                      _contextMenuOverlay?.remove();
+                      _previewVideo(video);
+                    },
+                    onDetails: () {
+                      _contextMenuOverlay?.remove();
+                      _showVideoDetails(video);
+                    },
+                    onShare: () {
+                      _contextMenuOverlay?.remove();
+                      _shareVideo(video);
+                    },
+                    onRemove: () {
+                      _contextMenuOverlay?.remove();
+                      _removeFromRecent(video);
+                    }))));
 
     Overlay.of(context).insert(_contextMenuOverlay!);
   }
@@ -303,41 +344,36 @@ class _VideoUploadState extends State<VideoUpload>
 
   void _showVideoDetails(Map<String, dynamic> video) {
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Détails de la vidéo'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Nom: ${video['name']}'),
-            SizedBox(height: 8),
-            Text('Durée: ${video['duration']}'),
-            SizedBox(height: 8),
-            Text('Taille: ${video['fileSize']}'),
-            SizedBox(height: 8),
-            Text('Résolution: ${video['resolution']}'),
-            SizedBox(height: 8),
-            Text('Format: ${video['format']}'),
-            SizedBox(height: 8),
-            Text('Date: ${video['date']}'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Fermer'),
-          ),
-        ],
-      ),
-    );
+        context: context,
+        builder: (context) => AlertDialog(
+                title: Text('Détails de la vidéo'),
+                content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Nom: ${video['name']}'),
+                      SizedBox(height: 8),
+                      Text('Durée: ${video['duration']}'),
+                      SizedBox(height: 8),
+                      Text('Taille: ${video['fileSize']}'),
+                      SizedBox(height: 8),
+                      Text('Résolution: ${video['resolution']}'),
+                      SizedBox(height: 8),
+                      Text('Format: ${video['format']}'),
+                      SizedBox(height: 8),
+                      Text('Date: ${video['date']}'),
+                    ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text('Fermer')),
+                ]));
   }
 
   void _shareVideo(Map<String, dynamic> video) {
     // Share functionality would be implemented here
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Partage de ${video['name']}')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Partage de ${video['name']}')));
   }
 
   void _removeFromRecent(Map<String, dynamic> video) {
@@ -355,17 +391,14 @@ class _VideoUploadState extends State<VideoUpload>
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de la sélection de la vidéo')),
-      );
+          SnackBar(content: Text('Erreur lors de la sélection de la vidéo')));
     }
   }
 
   Future<void> _pickVideoFromFiles() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-      );
+      FilePickerResult? result = await FilePicker.platform
+          .pickFiles(type: FileType.video, allowMultiple: false);
 
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
@@ -383,8 +416,7 @@ class _VideoUploadState extends State<VideoUpload>
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de la sélection du fichier')),
-      );
+          SnackBar(content: Text('Erreur lors de la sélection du fichier')));
     }
   }
 
@@ -412,8 +444,7 @@ class _VideoUploadState extends State<VideoUpload>
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de l\'enregistrement')),
-      );
+          SnackBar(content: Text('Erreur lors de l\'enregistrement')));
     }
   }
 
@@ -447,9 +478,8 @@ class _VideoUploadState extends State<VideoUpload>
       _showLargeFileWarning = false;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Compression de $_selectedLargeFile en cours...')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Compression de $_selectedLargeFile en cours...')));
   }
 
   void _handleLargeFileProceed() {
@@ -468,237 +498,465 @@ class _VideoUploadState extends State<VideoUpload>
     });
   }
 
+  /// Enhanced video upload with real file handling
+  Future<void> _uploadVideoFromGallery() async {
+    try {
+      // Request permissions
+      if (!kIsWeb) {
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          _showErrorMessage('Permission de stockage refusée');
+          return;
+        }
+      }
+
+      // Pick video file
+      final XFile? videoFile = await _imagePicker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 10), // Limit video length
+      );
+
+      if (videoFile != null) {
+        setState(() {
+          _isUploading = true;
+          _uploadProgress = 0.0;
+        });
+
+        // Simulate upload progress
+        for (int i = 0; i <= 100; i += 10) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          setState(() {
+            _uploadProgress = i / 100.0;
+          });
+        }
+
+        // Get file info
+        final file = File(videoFile.path);
+        final fileSize = await file.length();
+        final fileName = videoFile.name;
+
+        // Check file size (limit to 100MB)
+        if (fileSize > 100 * 1024 * 1024) {
+          _showLargeFileWarningDialog(fileName, fileSize);
+          setState(() {
+            _isUploading = false;
+          });
+          return;
+        }
+
+        // Add to uploaded videos list
+        final videoData = {
+          'id': DateTime.now().millisecondsSinceEpoch,
+          'name': fileName,
+          'file': file,
+          'path': videoFile.path,
+          'size': fileSize,
+          'duration': 120, // Would be calculated from actual video
+          'frames': 3600, // Would be calculated from actual video
+          'thumbnail': await _generateThumbnail(file),
+          'uploadDate': DateTime.now(),
+          'isProcessed': false,
+        };
+
+        setState(() {
+          _uploadedVideos.insert(0, videoData);
+          _filteredVideos = List.from(_uploadedVideos);
+          _isUploading = false;
+        });
+
+        _showSuccessMessage('Vidéo ajoutée avec succès');
+      }
+    } catch (e) {
+      setState(() {
+        _isUploading = false;
+      });
+      _showErrorMessage('Erreur lors de l\'ajout de la vidéo: $e');
+    }
+  }
+
+  /// Record video with camera
+  Future<void> _recordVideoFromCamera() async {
+    try {
+      // Request camera permission
+      final cameraStatus = await Permission.camera.request();
+      final microphoneStatus = await Permission.microphone.request();
+
+      if (!cameraStatus.isGranted || !microphoneStatus.isGranted) {
+        _showErrorMessage('Permissions caméra et microphone requises');
+        return;
+      }
+
+      // Record video
+      final XFile? videoFile = await _imagePicker.pickVideo(
+          source: ImageSource.camera, maxDuration: const Duration(minutes: 5));
+
+      if (videoFile != null) {
+        // Process the recorded video same as uploaded video
+        await _processRecordedVideo(videoFile);
+      }
+    } catch (e) {
+      _showErrorMessage('Erreur lors de l\'enregistrement: $e');
+    }
+  }
+
+  /// Upload video from file system
+  Future<void> _uploadFromFiles() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform
+          .pickFiles(type: FileType.video, allowMultiple: true);
+
+      if (result != null && result.files.isNotEmpty) {
+        for (var file in result.files) {
+          if (file.path != null) {
+            final videoFile = File(file.path!);
+            await _processUploadedFile(videoFile, file.name);
+          }
+        }
+      }
+    } catch (e) {
+      _showErrorMessage('Erreur lors de l\'importation: $e');
+    }
+  }
+
+  /// Generate thumbnail for video (placeholder implementation)
+  Future<String> _generateThumbnail(File videoFile) async {
+    // In a real implementation, you would extract actual thumbnail
+    // For now, return a placeholder image
+    return 'https://images.pexels.com/photos/1181671/pexels-photo-1181671.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1';
+  }
+
+  /// Process recorded video
+  Future<void> _processRecordedVideo(XFile videoFile) async {
+    final file = File(videoFile.path);
+    await _processUploadedFile(file, videoFile.name);
+  }
+
+  /// Process uploaded file
+  Future<void> _processUploadedFile(File file, String fileName) async {
+    final fileSize = await file.length();
+
+    final videoData = {
+      'id': DateTime.now().millisecondsSinceEpoch,
+      'name': fileName,
+      'file': file,
+      'path': file.path,
+      'size': fileSize,
+      'duration': 120,
+      'frames': 3600,
+      'thumbnail': await _generateThumbnail(file),
+      'uploadDate': DateTime.now(),
+      'isProcessed': false,
+    };
+
+    setState(() {
+      _uploadedVideos.insert(0, videoData);
+      _filteredVideos = List.from(_uploadedVideos);
+    });
+  }
+
+  /// Start processing selected videos with OpenAI
+  void _startProcessingSelected() {
+    if (_selectedVideoIds.isEmpty) return;
+
+    final selectedVideos = _uploadedVideos
+        .where((video) => _selectedVideoIds.contains(video['id']))
+        .toList();
+
+    // Navigate to processing screen with real video files
+    Navigator.pushNamed(context, '/video-processing', arguments: {
+      'videoCount': selectedVideos.length,
+      'videoQueue': selectedVideos,
+    });
+  }
+
+  /// Test OpenAI integration with image
+  Future<void> _testImageAnalysis() async {
+    try {
+      final XFile? imageFile =
+          await _imagePicker.pickImage(source: ImageSource.gallery);
+
+      if (imageFile != null) {
+        final imageBytes = await imageFile.readAsBytes();
+
+        _showLoadingDialog('Analyse en cours avec OpenAI...');
+
+        final result =
+            await _analysisService.analyzeImageForCode(imageBytes: imageBytes);
+
+        Navigator.pop(context); // Close loading dialog
+
+        if (result != null) {
+          _showCodeResultDialog(result.code);
+        } else {
+          _showErrorMessage('Aucun code Python détecté dans l\'image');
+        }
+      }
+    } catch (e) {
+      Navigator.pop(context); // Close loading dialog if open
+      _showErrorMessage('Erreur lors de l\'analyse: $e');
+    }
+  }
+
+  void _showLoadingDialog(String message) {
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+                content: Row(children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 16),
+              Expanded(child: Text(message)),
+            ])));
+  }
+
+  void _showCodeResultDialog(String code) {
+    showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: const Text('Code détecté par OpenAI'),
+                content: Container(
+                    width: double.maxFinite,
+                    height: 300,
+                    child: SingleChildScrollView(
+                        child: SelectableText(code,
+                            style: const TextStyle(fontFamily: 'monospace')))),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Fermer')),
+                  ElevatedButton(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: code));
+                        Navigator.pop(context);
+                        _showSuccessMessage('Code copié dans le presse-papier');
+                      },
+                      child: const Text('Copier')),
+                ]));
+  }
+
+  void _showSuccessMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating));
+  }
+
+  void _showErrorMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating));
+  }
+
+  void _showLargeFileWarningDialog(String fileName, int fileSize) {
+    showDialog(
+        context: context,
+        builder: (context) => LargeFileWarningWidget(
+            fileName: fileName,
+            fileSize: fileSize.toString(),
+            onCancel: () => Navigator.pop(context),
+            onCompress: () {
+              Navigator.pop(context);
+              _handleLargeFileCompress();
+            },
+            onProceedAnyway: () {
+              Navigator.pop(context);
+              _handleLargeFileProceed();
+            }));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.lightTheme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: Text('Upload'),
-        leading: IconButton(
-          onPressed: () => Navigator.pop(context),
-          icon: CustomIconWidget(
-            iconName: 'arrow_back',
-            color: AppTheme.lightTheme.colorScheme.onSurface,
-            size: 24,
+        backgroundColor: AppTheme.lightTheme.scaffoldBackgroundColor,
+        appBar: AppBar(
+            title: Text(
+                _isSelectionMode
+                    ? '${_selectedVideoIdsSet.length} sélectionnée(s)'
+                    : 'Mes vidéos',
+                style: AppTheme.lightTheme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            leading: _isSelectionMode
+                ? IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = false;
+                        _selectedVideoIdsSet.clear();
+                      });
+                    },
+                    icon: const Icon(Icons.close))
+                : IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: CustomIconWidget(
+                        iconName: 'arrow_back',
+                        color: AppTheme.lightTheme.colorScheme.onSurface,
+                        size: 6.w)),
+            actions: [
+              if (_isSelectionMode && _selectedVideoIdsSet.isNotEmpty) ...[
+                IconButton(
+                    onPressed: _startProcessingSelected,
+                    icon: const Icon(Icons.play_arrow),
+                    tooltip: 'Traiter avec IA'),
+                IconButton(
+                    onPressed: () {
+                      // Delete selected videos
+                      setState(() {
+                        _uploadedVideos.removeWhere(
+                            (video) => _selectedVideoIdsSet.contains(video['id']));
+                        _filteredVideos = List.from(_uploadedVideos);
+                        _selectedVideoIdsSet.clear();
+                        _isSelectionMode = false;
+                      });
+                    },
+                    icon: const Icon(Icons.delete),
+                    tooltip: 'Supprimer'),
+              ] else ...[
+                IconButton(
+                    onPressed: _testImageAnalysis,
+                    icon: const Icon(Icons.image_search),
+                    tooltip: 'Test IA sur image'),
+                IconButton(
+                    onPressed: () => Navigator.pushNamed(context, '/settings'),
+                    icon: CustomIconWidget(
+                        iconName: 'settings',
+                        color: AppTheme.lightTheme.colorScheme.onSurface,
+                        size: 6.w)),
+              ],
+            ],
+            elevation: 0,
+            backgroundColor: AppTheme.lightTheme.scaffoldBackgroundColor),
+        body: SafeArea(
+            child: Column(children: [
+          // Search bar
+          VideoSearchBarWidget(
+            controller: _searchController,
+            onChanged: _filterVideos,
+            onClear: _clearSearch,
           ),
-        ),
-        actions: [
-          if (_filteredVideos.isNotEmpty)
-            IconButton(
-              onPressed: _toggleMultiSelectMode,
-              icon: CustomIconWidget(
-                iconName: _isMultiSelectMode ? 'close' : 'checklist',
-                color: AppTheme.lightTheme.colorScheme.onSurface,
-                size: 24,
-              ),
-            ),
-          IconButton(
-            onPressed: () => Navigator.pushNamed(context, '/settings'),
-            icon: CustomIconWidget(
-              iconName: 'settings',
-              color: AppTheme.lightTheme.colorScheme.onSurface,
-              size: 24,
-            ),
+
+          // Processing queue (if any)
+          ProcessingQueueWidget(
+            processingVideos: _processingVideos,
+            onCancelProcessing: _onCancelProcessing,
           ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          RefreshIndicator(
-            onRefresh: _refreshGallery,
-            child: CustomScrollView(
-              slivers: [
-                // Search bar
-                if (_filteredVideos.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: VideoSearchBarWidget(
-                      controller: _searchController,
-                      onChanged: _filterVideos,
-                      onClear: _clearSearch,
-                    ),
-                  ),
 
-                // Processing queue
-                if (_processingVideos.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: ProcessingQueueWidget(
-                      processingVideos: _processingVideos,
-                      onCancelProcessing: _onCancelProcessing,
-                    ),
-                  ),
+          // Video grid or empty state
+          Expanded(
+              child: _filteredVideos.isEmpty
+                  ? EmptyGalleryWidget(
+                      onCameraShortcut: _recordVideoFromCamera,
+                    )
+                  : GridView.builder(
+                      padding: EdgeInsets.all(4.w),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 3.w,
+                          mainAxisSpacing: 3.w,
+                          childAspectRatio: 0.8),
+                      itemCount: _filteredVideos.length,
+                      itemBuilder: (context, index) {
+                        final video = _filteredVideos[index];
+                        final isSelected =
+                            _selectedVideoIdsSet.contains(video['id']);
 
-                // Recent uploads
-                if (_recentVideos.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: RecentUploadsWidget(
-                      recentVideos: _recentVideos,
-                      onVideoTap: _previewVideo,
-                    ),
-                  ),
-
-                // Multi-select header
-                if (_isMultiSelectMode && _selectedVideoIds.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: Container(
-                      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppTheme.lightTheme.colorScheme.tertiary
-                            .withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          CustomIconWidget(
-                            iconName: 'check_circle',
-                            color: AppTheme.lightTheme.colorScheme.tertiary,
-                            size: 20,
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            '${_selectedVideoIds.length} vidéo(s) sélectionnée(s)',
-                            style: AppTheme.lightTheme.textTheme.bodyMedium
-                                ?.copyWith(
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                // Video grid or empty state
-                _filteredVideos.isEmpty
-                    ? SliverFillRemaining(
-                        child: EmptyGalleryWidget(
-                          onCameraShortcut: _recordVideo,
-                        ),
-                      )
-                    : SliverPadding(
-                        padding: EdgeInsets.all(16),
-                        sliver: SliverGrid(
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                            childAspectRatio: 0.8,
-                          ),
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final video = _filteredVideos[index];
-                              final isSelected =
-                                  _selectedVideoIds.contains(video['id']);
-
-                              return VideoGridItemWidget(
-                                video: video,
-                                isSelected: isSelected,
-                                onTap: () => _onVideoTap(video),
-                                onLongPress: () {
-                                  final RenderBox renderBox =
-                                      context.findRenderObject() as RenderBox;
-                                  final position =
-                                      renderBox.localToGlobal(Offset.zero);
-                                  _onVideoLongPress(video, position);
-                                },
-                              );
+                        return VideoGridItemWidget(
+                            video: video,
+                            isSelected: isSelected,
+                            onTap: () {
+                              if (_isSelectionMode) {
+                                setState(() {
+                                  if (isSelected) {
+                                    _selectedVideoIdsSet.remove(video['id']);
+                                  } else {
+                                    _selectedVideoIdsSet.add(video['id']);
+                                  }
+                                });
+                              } else {
+                                // Show video details or start processing
+                                _startProcessingSingle(video);
+                              }
                             },
-                            childCount: _filteredVideos.length,
-                          ),
-                        ),
-                      ),
-              ],
-            ),
-          ),
-
-          // Large file warning overlay
-          if (_showLargeFileWarning)
-            Container(
-              color: Colors.black.withValues(alpha: 0.5),
-              child: Center(
-                child: LargeFileWarningWidget(
-                  fileName: _selectedLargeFile,
-                  fileSize: _selectedLargeFileSize,
-                  onCompress: _handleLargeFileCompress,
-                  onProceedAnyway: _handleLargeFileProceed,
-                  onCancel: _handleLargeFileCancel,
-                ),
-              ),
-            ),
-
-          // Loading overlay
-          if (_isLoading)
-            Container(
-              color: Colors.black.withValues(alpha: 0.3),
-              child: Center(
+                            onLongPress: () {
+                              setState(() {
+                                _isSelectionMode = true;
+                                _selectedVideoIdsSet.add(video['id']);
+                              });
+                              HapticFeedback.mediumImpact();
+                            });
+                      })),
+        ])),
+        floatingActionButton: _isUploading
+            ? FloatingActionButton(
+                onPressed: null,
                 child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    AppTheme.lightTheme.colorScheme.tertiary,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-      floatingActionButton: _filteredVideos.isNotEmpty
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton(
-                  heroTag: "gallery",
-                  onPressed: _pickVideoFromGallery,
-                  child: CustomIconWidget(
-                    iconName: 'photo_library',
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
-                SizedBox(height: 12),
-                FloatingActionButton(
-                  heroTag: "files",
-                  onPressed: _pickVideoFromFiles,
-                  child: CustomIconWidget(
-                    iconName: 'folder',
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
-                SizedBox(height: 12),
-                FloatingActionButton(
-                  heroTag: "camera",
-                  onPressed: _recordVideo,
-                  child: CustomIconWidget(
-                    iconName: 'videocam',
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
-              ],
-            )
-          : null,
-      bottomNavigationBar: _isMultiSelectMode && _selectedVideoIds.isNotEmpty
-          ? Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.lightTheme.colorScheme.surface,
-                border: Border(
-                  top: BorderSide(
-                    color: AppTheme.lightTheme.colorScheme.outline
-                        .withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
-              child: SafeArea(
-                child: ElevatedButton(
-                  onPressed: _processSelectedVideos,
-                  child: Text('Traiter ${_selectedVideoIds.length} vidéo(s)'),
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: Size(double.infinity, 48),
-                  ),
-                ),
-              ),
-            )
-          : null,
-    );
+                    value: _uploadProgress,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white)))
+            : FloatingActionButton.extended(
+                onPressed: () {
+                  _showUploadOptions();
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Ajouter'),
+                backgroundColor: AppTheme.lightTheme.colorScheme.primary));
+  }
+
+  void _startProcessingSingle(Map<String, dynamic> video) {
+    Navigator.pushNamed(context, '/video-processing', arguments: {
+      'videoCount': 1,
+      'videoQueue': [video],
+    });
+  }
+
+  void _showUploadOptions() {
+    showModalBottomSheet(
+        context: context,
+        builder: (context) => Container(
+            padding: EdgeInsets.all(4.w),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                  leading: const Icon(Icons.video_library),
+                  title: const Text('Galerie vidéo'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _uploadVideoFromGallery();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.videocam),
+                  title: const Text('Enregistrer vidéo'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _recordVideoFromCamera();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.folder),
+                  title: const Text('Fichiers'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _uploadFromFiles();
+                  }),
+            ])));
+  }
+
+  void _showVideoContextMenu(Map<String, dynamic> video) {
+    showModalBottomSheet(
+        context: context,
+        builder: (context) => VideoContextMenuWidget(
+            video: video,
+            onPreview: () {
+              Navigator.pop(context);
+              _previewVideo(video);
+            },
+            onDetails: () {
+              Navigator.pop(context);
+              _showVideoDetails(video);
+            },
+            onShare: () {
+              Navigator.pop(context);
+              // Implement sharing functionality
+            },
+            onRemove: () {
+              Navigator.pop(context);
+              _removeFromRecent(video);
+            }));
   }
 }
